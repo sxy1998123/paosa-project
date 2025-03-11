@@ -10,7 +10,7 @@ socketio = SocketIO(app)
 # 启动TCP连接线程
 connector = DroneConnector()
 connector.start()
-connector.join() # 线程等待直到手动终止
+# connector.join() # 线程等待直到手动终止
 
 print(status)
 
