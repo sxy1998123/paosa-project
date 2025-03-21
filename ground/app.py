@@ -1,11 +1,12 @@
-from flask import Flask, send_from_directory, send_file
+from flask import Flask, send_from_directory, send_file, jsonify
 from flask_socketio import SocketIO, send
 from DroneConnector import status, DroneConnector
 import threading
+
 app = Flask(__name__, static_folder="frontend")
 app.config['DOWNLOAD_FOLDER'] = 'download_cache'  # 文件下载路径
 socketio = SocketIO(app)
-connector = DroneConnector()
+droneConnector = DroneConnector()
 
 
 @app.errorhandler(404)
@@ -28,12 +29,14 @@ def handleMessage(msg):
 @app.route('/download')
 def download_file():
     print("发送下载指令")
-    connector.drone_conn.sendall(b"test")
+    droneConnector.drone_conn.sendall(
+        droneConnector.pack_data({"cmd": "download", "device_id": 1})
+    )
     return "OK"
     # try:
     #     # 建立专用下载连接
     #     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as dl_sock:
-    #         dl_sock.connect((connector.host, 5001))  # 无人机下载专用端口
+    #         dl_sock.connect((droneConnector.host, 5001))  # 无人机下载专用端口
     #         dl_sock.sendall(f"DOWNLOAD:{filename}".encode())
 
     #         # 接收文件数据
@@ -50,9 +53,16 @@ def download_file():
     #     return f"Download failed: {e}", 500
 
 
+@app.route('/test')
+def test():
+    return jsonify({
+        "drone_connecting": droneConnector.drone_connecting
+    })
+
+
 if __name__ == '__main__':
     # 子线程启动TCP服务器
-    connector.start()
-    # connector.join() # 线程等待直到手动终止
+    droneConnector.start()
+    # droneConnector.join() # 线程等待直到手动终止
     # 主线程启动Flask
     app.run(host='0.0.0.0', port=8000)

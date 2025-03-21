@@ -19,23 +19,26 @@ class DroneConnector(threading.Thread):
 
         self.server_socket = None
         self.drone_conn = None
+        self.drone_connecting = False
 
     def run(self):
+        self.server_socket = socket.socket(
+            socket.AF_INET, socket.SOCK_STREAM)
+        self.server_socket.bind((self.host, self.port))
+        self.server_socket.listen(1)
+        print("地面端TCP服务器已启动,等待无人机连接...")
         while self.running:
             try:
-                self.server_socket = socket.socket(
-                    socket.AF_INET, socket.SOCK_STREAM)
-                self.server_socket.bind((self.host, self.port))
-                self.server_socket.listen(1)
-                print("地面端TCP服务器已启动,等待无人机连接...")
+                # 等待无人机连接
                 self.drone_conn, addr = self.server_socket.accept()
                 print("无人机已连接")
+                self.drone_connecting = True
                 while True:
                     # 接收实时状态数据（格式：JSON字符串）
                     data_length_byte = self.drone_conn.recv(4)
-
                     if not data_length_byte:
-                        print("未接收到报文")
+                        print("接收到无法识别的报文, 舍弃")
+                        continue
                     # 开始接收完整数据
                     data_length = int.from_bytes(data_length_byte[:4], 'big')
                     received_data = self.drone_conn.recv(data_length)
@@ -47,15 +50,22 @@ class DroneConnector(threading.Thread):
                             break
                         received_data += chunk
                     my_dict = json.loads(received_data.decode('utf-8'))
-                    print(f"已接收到无人机端开发板设备tcp端数据包：", my_dict)
+                    print(f"已接收到{addr}无人机端开发板设备tcp端数据包：{my_dict}")
 
-            except Exception as e:
+            except ConnectionError as e:
                 print(f"Connection error: {e}")
+                self.drone_connecting = False
 
             except socket.timeout:
+                self.drone_connecting = False
                 print("tcp连接超时")
 
         self.running = False
+
+    def pack_data(self, data):
+        data_json = json.dumps(data).encode('utf-8')
+        data_length = len(data_json).to_bytes(4, 'big')
+        return data_length + data_json
 
     def restart(self):
         self.running = True
