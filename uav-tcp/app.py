@@ -3,7 +3,6 @@ import threading
 import time
 from datetime import datetime
 import json
-import struct
 
 
 class DroneTCPHandler(threading.Thread):
@@ -18,6 +17,7 @@ class DroneTCPHandler(threading.Thread):
         # 无人机端（本机TCP服务端配置）
         self.drone_host = '0.0.0.0'
         self.drone_port = 5001
+        self.drone_tcp_max_connections = 15  # 最大连接数
 
         # 文件服务配置（暂时不用）
         self.file_host = '0.0.0.0'
@@ -57,7 +57,6 @@ class DroneTCPHandler(threading.Thread):
         self.registered_devices.append(device)
 
     # 注销设备
-
     def handleUnregistDevice(self, device_id):
         updating_device = next(
             (device for device in self.registered_devices if device["device_id"] == device_id),
@@ -68,8 +67,8 @@ class DroneTCPHandler(threading.Thread):
         else:
             print(f"注销时发生异常: 设备未注册: {device_id}")
 
+    # 更新设备状态
     def update_status_to_send(self):
-        # 更新设备状态
         result = []
         for device in self.registered_devices:
             result.append(
@@ -79,55 +78,63 @@ class DroneTCPHandler(threading.Thread):
                 }
             )
         self.status_to_send["device_list"] = result
-    # 无人机作为客户端向地面端发送数据线程处理函数
 
-    def handleSendToGround(self):
-        # 此时应保证ground_socket可用
-        json_data = json.dumps(self.status_to_send).encode('utf-8')
+    # 发送消息到地面端
+    def handleSendMsgToGround(self, message):
+        self.message_to_send["message"] = message
+        json_data = json.dumps(self.message_to_send).encode('utf-8')
         length = len(json_data).to_bytes(4, 'big')  # 前4字节表示长度
         self.ground_socket.sendall(length + json_data)  # 发送数据
-        # print("已发送")
+        self.message_to_send["time"] = datetime.now().strftime(
+            "%Y-%m-%d %H:%M:%S")  # 更新时间戳
+        # print("已发送消息")
+
+    # 发送状态到地面端
+    def handleSendStatusToGround(self):
+        json_data = json.dumps(self.status_to_send).encode('utf-8')
+        length = len(json_data).to_bytes(4, 'big')  # 前4字节表示长度
+        # 此时应保证ground_socket可用
+        self.ground_socket.sendall(length + json_data)  # 发送数据
         self.update_status_to_send()  # 更新数据
         self.status_to_send["time"] = datetime.now().strftime(
             "%Y-%m-%d %H:%M:%S")  # 更新时间戳
+        # print("已发送状态")
 
-    # 接收地面端命令线程处理函数
+    # 接收地面端命令线程处理函数（未完成）
     def handleReceiveGroundCmd(self):
-        while self.ground_connecting:
-            cmd_length_byte = self.ground_socket.recv(4)
-            if not cmd_length_byte:
-                print("接收到地面端无法解析的命令,舍弃")
-                continue
-            cmd_length = int.from_bytes(cmd_length_byte, 'big')
-            received_data = self.ground_socket.recv(cmd_length)
-            while (len(received_data) < cmd_length):
-                chunk = self.ground_socket.recv(
-                    cmd_length - len(received_data))
-                if not chunk:
-                    break
-                received_data += chunk
+        try:
+            while self.ground_connecting:
+                cmd_length_byte = self.ground_socket.recv(4)
+                if not cmd_length_byte:
+                    print("接收到地面端无法解析的命令,舍弃")
+                    continue
+                cmd_length = int.from_bytes(cmd_length_byte, 'big')
+                received_data = self.ground_socket.recv(cmd_length)
+                while (len(received_data) < cmd_length):
+                    chunk = self.ground_socket.recv(cmd_length - len(received_data))
+                    if not chunk:
+                        break
+                    received_data += chunk
 
-            cmd = json.loads(received_data.decode('utf-8'))
-            print(f"接收到地面端命令: {cmd}")
-            print(f"cmd:{cmd['cmd']} id:{cmd['device_id']}")
+                cmd = json.loads(received_data.decode('utf-8'))
+                print(f"接收到地面端命令: {cmd}")
+                print(f"cmd:{cmd['cmd']} id:{cmd['device_id']}")
+        except ConnectionError as e:
+            print(f"退出命令接收线程: {e}")
 
     # 连接地面端的客户端线程处理函数
     def start_drone_client(self):
         while self.running:
-            self.ground_socket = socket.socket(
-                socket.AF_INET, socket.SOCK_STREAM)
+            self.ground_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             try:
                 print("尝试连接地面端服务器")
-                self.ground_socket.connect(
-                    (self.ground_status_host, self.ground_status_port))
-
+                self.ground_socket.connect((self.ground_status_host, self.ground_status_port))
                 print("连接成功")
                 self.ground_connecting = True
                 # 启动接收地面端命令线程
-                threading.Thread(
-                    target=self.handleReceiveGroundCmd, daemon=True).start()
+                threading.Thread(target=self.handleReceiveGroundCmd, daemon=True).start()
                 while (self.ground_connecting):
-                    self.handleSendToGround()
+                    self.handleSendStatusToGround()
                     time.sleep((1 / self.ground_status_hz))  # 发送间隔
 
             except ConnectionError as e:
@@ -137,8 +144,8 @@ class DroneTCPHandler(threading.Thread):
                 time.sleep(self.ground_connection_retry_times)  # 重连
             except Exception as e:
                 print(f"Status client error: {e}")
-                self.ground_connecting = False
                 self.ground_socket = None
+                self.ground_connecting = False
                 time.sleep(self.ground_connection_retry_times)
 
     # 接收监测装置数据线程处理函数
@@ -157,14 +164,13 @@ class DroneTCPHandler(threading.Thread):
                 data_length = int.from_bytes(data_length_byte, 'big')
                 received_data = device_conn.recv(data_length)
                 while (len(received_data) < data_length):
-                    chunk = device_conn.recv(
-                        data_length - len(received_data))
+                    chunk = device_conn.recv(data_length - len(received_data))
                     if not chunk:
                         break
                     received_data += chunk
                 # 解析数据
                 data = json.loads(received_data.decode('utf-8'))
-                print(f"接收到监测装置数据: {data}  线程ID: {threading.current_thread()}")
+
                 device_last_active = time.time()
                 # 更新或注册设备信息
                 device_id = data["device_id"]  # 待更新的设备ID
@@ -172,6 +178,7 @@ class DroneTCPHandler(threading.Thread):
                     (device for device in self.registered_devices if device["device_id"] == device_id),
                     None  # 默认值，可改为其他值如 {}
                 )
+                print(f"接收到监测装置数据: {data}  线程ID: {threading.current_thread()}")
                 print(f"device_id:{device_id} updating_device:{updating_device}")
                 if updating_device:
                     # 更新设备信息
@@ -186,6 +193,7 @@ class DroneTCPHandler(threading.Thread):
                 break
             except ConnectionError as e:
                 print(f"TCP连接断开: {device_id}, 注销设备")
+                self.handleSendMsgToGround(f"监测装置{device_id}连接断开")
                 self.handleUnregistDevice(device_id)
                 break
             except Exception as e:
@@ -196,26 +204,22 @@ class DroneTCPHandler(threading.Thread):
     def start_drone_server(self):
         server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         server.bind((self.drone_host, self.drone_port))
-        server.listen(15) #最大连接数
+        server.listen(self.drone_tcp_max_connections)  # 最大连接数
 
         print("无人机等待监测装置连接...")
         while self.running:
             device_conn, addr = server.accept()  # 阻塞式接收监测装置数据
             print(f"监测装置已连接: {addr}")
-            # 为每个监测装置创建独立线程
-            threading.Thread(target=self.handle_sensor,
-                             args=(device_conn,), daemon=True).start()
+            threading.Thread(target=self.handle_sensor, args=(device_conn,), daemon=True).start()  # 为每个监测装置创建独立线程
 
     # 子线程启动函数(实例化时自动调用)
     def run(self):
         self.running = True
         # 启动服务端线程
-        drone_server_thread = threading.Thread(
-            target=self.start_drone_server, daemon=True)
+        drone_server_thread = threading.Thread(target=self.start_drone_server, daemon=True)
         drone_server_thread.start()
         # 启动客户端线程
-        drone_client_thread = threading.Thread(
-            target=self.start_drone_client, daemon=True)
+        drone_client_thread = threading.Thread(target=self.start_drone_client, daemon=True)
         drone_client_thread.start()
 
         while (drone_server_thread.is_alive() or drone_client_thread.is_alive()):
@@ -223,7 +227,6 @@ class DroneTCPHandler(threading.Thread):
 
     def stop(self):
         self.running = False
-        self.status_socket = None
 
 
 if __name__ == '__main__':
