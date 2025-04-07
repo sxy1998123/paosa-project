@@ -2,16 +2,12 @@ import threading
 import socket
 import time
 import json
-# 共享状态变量 主线程只读不写
-status = {
-
-}
-
-# TCP通信线程相关
+from flask_socketio import SocketIO, send
+# TCP通信线程
 
 
 class DroneConnector(threading.Thread):
-    def __init__(self):
+    def __init__(self,socketio):
         super().__init__(daemon=True)
         self.host = '127.0.0.1'
         self.port = 5000  # 本机tcp服务端所用ip及端口
@@ -21,9 +17,9 @@ class DroneConnector(threading.Thread):
         self.drone_conn = None
         self.drone_connecting = False
 
+        self.socketio = socketio # 主线程的socketio对象
     def run(self):
-        self.server_socket = socket.socket(
-            socket.AF_INET, socket.SOCK_STREAM)
+        self.server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self.server_socket.bind((self.host, self.port))
         self.server_socket.listen(1)
         print("地面端TCP服务器已启动,等待无人机连接...")
@@ -50,8 +46,8 @@ class DroneConnector(threading.Thread):
                             break
                         received_data += chunk
                     my_dict = json.loads(received_data.decode('utf-8'))
-                    print(f"已接收到{addr}无人机端开发板设备tcp端数据包：{my_dict}")
-
+                    # print(f"已接收到{addr}无人机端开发板设备tcp端数据包：{my_dict}")
+                    self.socketio.emit('device-status', my_dict)
             except ConnectionError as e:
                 print(f"Connection error: {e}")
                 self.drone_connecting = False

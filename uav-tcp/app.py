@@ -34,15 +34,17 @@ class DroneTCPHandler(threading.Thread):
         self.running = False
 
         self.status_to_send = {
-            "type": "status",
+            "type": "device-status",
             "time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             "device_list": []
         }
 
         self.message_to_send = {
-            "type": "message",
+            "type": "device-message",
             "time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-            "message": ""
+            "message": "",
+            "device_id": "",
+            "code": "0"  # 0: 已连接 1: 已断开
         }
 
         self.registered_devices = []
@@ -55,6 +57,8 @@ class DroneTCPHandler(threading.Thread):
             "device_status": {}
         }
         self.registered_devices.append(device)
+        if (self.ground_connecting):
+            self.handleSendMsgToGround(f"监测装置{device_id}已连接", device_id, 0)
 
     # 注销设备
     def handleUnregistDevice(self, device_id):
@@ -80,8 +84,10 @@ class DroneTCPHandler(threading.Thread):
         self.status_to_send["device_list"] = result
 
     # 发送消息到地面端
-    def handleSendMsgToGround(self, message):
+    def handleSendMsgToGround(self, message, device_id, code):
         self.message_to_send["message"] = message
+        self.message_to_send["device_id"] = device_id
+        self.message_to_send["code"] = code
         json_data = json.dumps(self.message_to_send).encode('utf-8')
         length = len(json_data).to_bytes(4, 'big')  # 前4字节表示长度
         self.ground_socket.sendall(length + json_data)  # 发送数据
@@ -193,7 +199,7 @@ class DroneTCPHandler(threading.Thread):
                 break
             except ConnectionError as e:
                 print(f"TCP连接断开: {device_id}, 注销设备")
-                self.handleSendMsgToGround(f"监测装置{device_id}连接断开")
+                self.handleSendMsgToGround(f"监测装置{device_id}连接断开", device_id, 1)
                 self.handleUnregistDevice(device_id)
                 break
             except Exception as e:

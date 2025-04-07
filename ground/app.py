@@ -1,12 +1,12 @@
 from flask import Flask, send_from_directory, send_file, jsonify
 from flask_socketio import SocketIO, send
-from DroneConnector import status, DroneConnector
+from DroneConnector import DroneConnector
 import threading
 
 app = Flask(__name__, static_folder="frontend")
 app.config['DOWNLOAD_FOLDER'] = 'download_cache'  # 文件下载路径
-socketio = SocketIO(app)
-droneConnector = DroneConnector()
+socketio = SocketIO(app, cors_allowed_origins="*")
+droneConnector = DroneConnector(socketio)
 
 
 @app.errorhandler(404)
@@ -18,12 +18,6 @@ def page_not_found(error):
 @app.route('/')
 def index():
     return send_from_directory(app.static_folder, 'index.html')
-
-
-@socketio.on('message')
-def handleMessage(msg):
-    print('Message: ' + msg)
-    send(msg)
 
 
 @app.route('/download')
@@ -60,9 +54,24 @@ def test():
     })
 
 
+@socketio.on('message')
+def handleMessage(msg):
+    print('Message: ' + msg)
+    send(msg)
+
+
+@socketio.on('connect')
+def handleConnect():
+    print('Connected')
+
+
+@socketio.on('disconnect')
+def handleDisconnect():
+    print('Disconnected')
+
+
 if __name__ == '__main__':
     # 子线程启动TCP服务器
     droneConnector.start()
-    # droneConnector.join() # 线程等待直到手动终止
     # 主线程启动Flask
-    app.run(host='0.0.0.0', port=8000)
+    socketio.run(app, host='0.0.0.0', port=8000)
