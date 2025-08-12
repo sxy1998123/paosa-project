@@ -3,58 +3,57 @@ import socket
 import time
 import json
 from flask_socketio import SocketIO, send
-# TCP通信线程
 
 
-class DroneConnector(threading.Thread):
-    def __init__(self,socketio):
+class CloudServerConnector(threading.Thread):
+    def __init__(self, socketio):
         super().__init__(daemon=True)
-        self.host = '127.0.0.1'
-        self.port = 5000  # 本机tcp服务端所用ip及端口
+        self.cloudHost = '127.0.0.1'  # 云端服务器ip
+        self.cloudPort = 5002  # 云端服务器端口
+        self.cloudReconnectionTime = 5  # 云端服务器重连时间
         self.running = True  # 本线程alive时为True
 
-        self.server_socket = None
-        self.drone_conn = None
-        self.drone_connecting = False
+        self.cloud_conn = None
+        self.cloud_connecting = False
 
-        self.socketio = socketio # 主线程的socketio对象
+        self.socketio = socketio  # 主线程的socketio对象
+
     def run(self):
-        self.server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        self.server_socket.bind((self.host, self.port))
-        self.server_socket.listen(1)
-        print("地面端TCP服务器已启动,等待无人机连接...")
         while self.running:
             try:
-                # 等待无人机连接
-                self.drone_conn, addr = self.server_socket.accept()
-                print("无人机已连接")
-                self.drone_connecting = True
+                if not self.cloud_connecting:
+                    self.cloud_conn = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                    self.cloud_conn.connect((self.cloudHost, self.cloudPort))
+                    self.cloud_connecting = True
+                    print("已与云端服务器建立连接")
                 while True:
                     # 接收实时状态数据（格式：JSON字符串）
-                    data_length_byte = self.drone_conn.recv(4)
+                    data_length_byte = self.cloud_conn.recv(4)
                     if not data_length_byte:
                         print("接收到无法识别的报文, 舍弃")
                         continue
                     # 开始接收完整数据
                     data_length = int.from_bytes(data_length_byte[:4], 'big')
-                    received_data = self.drone_conn.recv(data_length)
-                    # print(data_length_byte, data_length)
+                    received_data = self.cloud_conn.recv(data_length)
+                    print(data_length_byte, data_length)
                     while (len(received_data) < data_length):
-                        chunk = self.drone_conn.recv(
+                        chunk = self.cloud_conn.recv(
                             data_length - len(received_data))
                         if not chunk:
                             break
                         received_data += chunk
                     my_dict = json.loads(received_data.decode('utf-8'))
-                    # print(f"已接收到{addr}无人机端开发板设备tcp端数据包：{my_dict}")
+                    print(f"已接收到云端服务器数据包：{my_dict}")
                     self.socketio.emit(my_dict['type'], my_dict)
             except ConnectionError as e:
                 print(f"Connection error: {e}")
-                self.drone_connecting = False
+                self.cloud_connecting = False
+                time.sleep(self.cloudReconnectionTime)
 
             except socket.timeout:
-                self.drone_connecting = False
                 print("tcp连接超时")
+                self.cloud_connecting = False
+                time.sleep(self.cloudReconnectionTime)
 
         self.running = False
 

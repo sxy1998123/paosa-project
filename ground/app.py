@@ -1,12 +1,14 @@
 from flask import Flask, send_from_directory, send_file, jsonify
 from flask_socketio import SocketIO, send
 from DroneConnector import DroneConnector
+from CloudServerConnector import CloudServerConnector
 import threading
 
 app = Flask(__name__, static_folder="frontend")
 app.config['DOWNLOAD_FOLDER'] = 'download_cache'  # 文件下载路径
 socketio = SocketIO(app, cors_allowed_origins="*")
 droneConnector = DroneConnector(socketio)
+cloudServerConnector = CloudServerConnector(socketio)
 
 
 @app.errorhandler(404)
@@ -20,11 +22,20 @@ def index():
     return send_from_directory(app.static_folder, 'index.html')
 
 
-@app.route('/download')
-def download_file():
+@app.route('/drone_download')
+def drone_download():
     print("发送下载指令")
     droneConnector.drone_conn.sendall(
         droneConnector.pack_data({"cmd": "download", "device_id": 1})
+    )
+    return "OK"
+
+
+@app.route('/cloudserver_download')
+def cloudserver_download():
+    print("发送云端下载指令")
+    cloudServerConnector.cloud_conn.sendall(
+        cloudServerConnector.pack_data({"cmd": "download", "device_id": 1})
     )
     return "OK"
     # try:
@@ -50,7 +61,8 @@ def download_file():
 @app.route('/test')
 def test():
     return jsonify({
-        "drone_connecting": droneConnector.drone_connecting
+        "drone_connecting": droneConnector.drone_connecting,
+        "cloud_connecting": cloudServerConnector.cloud_connecting,
     })
 
 
@@ -73,5 +85,7 @@ def handleDisconnect():
 if __name__ == '__main__':
     # 子线程启动TCP服务器
     droneConnector.start()
+    cloudServerConnector.start()
+
     # 主线程启动Flask
     socketio.run(app, host='0.0.0.0', port=8000)
