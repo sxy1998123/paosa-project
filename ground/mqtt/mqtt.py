@@ -3,6 +3,15 @@ import paho.mqtt.client as mqtt
 import json
 from threading import Lock
 from datetime import datetime, timezone
+import logging
+
+logging.basicConfig(
+    level=logging.INFO,  # 修改日志级别输出所有日志
+    format='%(asctime)s %(name)s [%(pathname)s:%(lineno)d] %(levelname)s %(message)s',
+    datefmt='%Y-%m-%d %H:%M:%S',  # 日期时间格式
+)
+
+logger = logging.getLogger(__name__)
 
 
 def generate_utc_timestamp() -> str:
@@ -21,7 +30,7 @@ class MQTTClient:
                 cls._instance._initialized = False
             return cls._instance
 
-    def __init__(self, broker, port=1883, username=None, password=None, client_id=None):
+    def __init__(self, broker, port=1883, username=None, password=None, client_id=None, onConnectCallback=None, onDisconnectCallback=None, onPublishCallback=None, onMessageCallback=None, tls=False, ca_certs=None):
         if self._initialized:
             return
         self._initialized = True
@@ -32,64 +41,76 @@ class MQTTClient:
         self.password = password
         self.client_id = client_id
 
+        self.onConnectCallback = onConnectCallback or self._on_connect
+        self.onDisconnectCallback = onDisconnectCallback or self._on_disconnect
+        self.onPublishCallback = onPublishCallback or self._on_publish
+        self.onMessageCallback = onMessageCallback or self._on_message
+
         self.client = mqtt.Client(self.client_id)
         self._setup_callbacks()
-        self._connect()
-        print("MQTTClient initialized")
+        if tls and ca_certs in [None, ""]:
+            logger.info("MQTTClient initialized with TLS but no ca_certs provided.skipping ca_certs")
+            self.client.tls_set()
+            self.client.tls_insecure_set(True)
+        elif tls and ca_certs not in [None, ""]:
+            logger.info(f"MQTTClient initialized with TLS and ca_certs provided.ca_certs: {ca_certs}")
+            self.client.tls_set(ca_certs=ca_certs)
+        else:
+            logger.info("MQTTClient initialized without TLS")
+        self.connect()
 
     def _setup_callbacks(self):
         """设置MQTT事件回调"""
-        self.client.on_connect = self._on_connect
-        self.client.on_disconnect = self._on_disconnect
-        self.client.on_publish = self._on_publish
-        self.client.on_message = self._on_message
+        self.client.on_connect = self.onConnectCallback
+        self.client.on_disconnect = self.onDisconnectCallback
+        self.client.on_publish = self.onPublishCallback
+        self.client.on_message = self.onMessageCallback
 
-    def _connect(self):
+    def connect(self):
         """连接MQTT Broker"""
         if self.username and self.password:
             self.client.username_pw_set(self.username, self.password)
         self.client.connect_async(self.broker, self.port)
         self.client.loop_start()  # 启动后台线程处理网络流量
+        logger.info("Connecting to MQTT Broker...")
 
     def _on_connect(self, client, userdata, flags, rc):
         """连接成功回调"""
         if rc == 0:
-            print("Connected to MQTT Broker!")
-
-            # test
-            self.client.subscribe("/v1/devices/GZDKYSWCXZZ_002/datas")
-            # for i in range(1,3):
-            #     self.publish(payload=i)
+            logger.info("Connected to MQTT Broker!")
+            self.subscribe("gnss")
         else:
-            print(f"Failed to connect, return code {rc}")
+            logger.info(f"Failed to connect, return code {rc}")
 
     def _on_disconnect(self, client, userdata, rc):
         """连接断开回调"""
-        print(f"Disconnected with code {rc}, attempting reconnect...")
+        logger.info(f"Disconnected with code {rc}, attempting reconnect...")
         self.client.reconnect()
 
     def _on_publish(self, client, userdata, mid):
         """消息发布成功回调（可选）"""
-        print(f"Message {mid} published.")
+        logger.info(f"Message {mid} published.")
 
     def _on_message(self, client, userdata, message):
         """消息接收成功回调"""
-        print(f"Received `{message.payload.decode()}` from `{message.topic}` topic")
-        obj = json.loads(message.payload.decode())
-        print(obj["devices"])
+        logger.info(f"Received `{message.payload.decode()}` from `{message.topic}` topic")
 
-    def publish(self, topic="/v1/devices/GZDKYSWCXZZ_002/datas", payload={"state": "work"}, qos=1, retain=False):
+    def publish(self, topic="gnss", payload={}, qos=1, retain=False):
         """发布消息（线程安全）"""
-        # 示例用法
         utc_string = generate_utc_timestamp()
 
         payload_predata = {
-            "msg": "hello"
+            "time": utc_string,
+            "data": payload
         }
         msg_str = json.dumps(payload_predata, indent=4)
-        # print("utc_string:", utc_string)
-        # print(msg_str)
+        logger.info(f"Publishing `{msg_str}` to `{topic}` topic")
         self.client.publish(topic, msg_str, qos=qos, retain=retain)
+
+    def subscribe(self, topic):
+        """订阅主题"""
+        self.client.subscribe(topic)
+        logger.info(f"Subscribed to `{topic}` topic")
 
     def shutdown(self):
         """关闭连接"""
@@ -97,24 +118,40 @@ class MQTTClient:
         self.client.disconnect()
 
 
-MQTT_BROKER = 'mqtt.usr.cn'
-MQTT_PORT = 1883
-MQTT_USER = 'usr.cn'
-MQTT_PASSWORD = 'usr.cn'
-MQTT_CLIENT_ID = 'GZDKYSWCXZZ'
-
-brokerConnected = False
-
-mqtt_client = MQTTClient(
-    broker=MQTT_BROKER,
-    port=MQTT_PORT,
-    username=MQTT_USER,
-    password=MQTT_PASSWORD,
-    client_id=MQTT_CLIENT_ID
-)
-
-
+# test
 if __name__ == "__main__":
+    # mqtt
+    # MQTT_BROKER = 'mqtt.usr.cn'
+    # MQTT_PORT = 1883
+    # MQTT_USER = 'usr.cn'
+    # MQTT_PASSWORD = 'usr.cn'
+    # MQTT_CLIENT_ID = 'GZDKYSWCXZZ'
+   
+    # MQTT_BROKER = 'le6e110a.ala.cn-hangzhou.emqxsl.cn'
+    # MQTT_PORT = 8883
+    # MQTT_USER = 'test'
+    # MQTT_PASSWORD = '123'
+    # MQTT_CLIENT_ID = 'paosa-python-client'
+    
+    MQTT_BROKER = '155.138.210.11'
+    MQTT_PORT = 1883
+    MQTT_USER = 'test'
+    MQTT_PASSWORD = '123'
+    MQTT_CLIENT_ID = 'paosa-python-client'
+
+    def on_message_callback(client, userdata, message):
+        """消息接收成功回调"""
+        logger.info(f"Received `{message.payload.decode()}` from `{message.topic}` topic")
+
+    # 使用证书
+    # mqtt_client = MQTTClient(broker=MQTT_BROKER, port=MQTT_PORT, username=MQTT_USER, password=MQTT_PASSWORD,
+    #                          client_id=MQTT_CLIENT_ID, onMessageCallback=on_message_callback, tls=True, ca_certs='D:\\Project2025\\paosa-project\\ground\\mqtt\\emqxsl-ca.crt')
+    # 不使用证书
+    mqtt_client = MQTTClient(broker=MQTT_BROKER, port=MQTT_PORT, username=MQTT_USER, password=MQTT_PASSWORD,
+                             client_id=MQTT_CLIENT_ID, onMessageCallback=on_message_callback, tls=False)
+    # mqtt_client.subscribe("gnss")
+    logger.info("MQTTClient started")
+    time.sleep(5)
     while True:
-        mqtt_client.publish(payload={"state": "work"})
-        time.sleep(30)
+        # mqtt_client.publish()
+        time.sleep(10)

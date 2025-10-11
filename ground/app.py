@@ -1,14 +1,167 @@
-from flask import Flask, send_from_directory, send_file, jsonify
-from flask_socketio import SocketIO, send
-from DroneConnector import DroneConnector
-from CloudServerConnector import CloudServerConnector
+from flask import Flask, send_from_directory, send_file, jsonify, request
+from flask_socketio import SocketIO, send, emit
+from mqtt.mqtt import MQTTClient
+import logging
+from datetime import datetime
+import json
 import threading
+logging.basicConfig(
+    level=logging.INFO,  # 修改日志级别输出所有日志
+    format='%(asctime)s %(name)s [%(pathname)s:%(lineno)d] %(levelname)s %(message)s',
+    datefmt='%Y-%m-%d %H:%M:%S',  # 日期时间格式
+)
 
+logger = logging.getLogger(__name__)
+
+# flask
 app = Flask(__name__, static_folder="frontend")
 app.config['DOWNLOAD_FOLDER'] = 'download_cache'  # 文件下载路径
+
+# socketio
 socketio = SocketIO(app, cors_allowed_origins="*")
-droneConnector = DroneConnector(socketio)
-cloudServerConnector = CloudServerConnector(socketio)
+
+# mqtt
+MQTT_BROKER = '155.138.210.11'
+MQTT_PORT = 1883
+MQTT_USER = 'test'
+MQTT_PASSWORD = '123'
+MQTT_CLIENT_ID = 'paosa-python-client'
+
+# 心跳包消息
+heart_beat_messages = ['www.usr.cn']
+
+# 设备列表
+device_list = []
+device_list_lock = threading.Lock()  # 设备列表更新锁
+
+# 设备高度图表数据
+device_alt_chartdata_map_all = {}
+device_alt_chartdata_map_mqtt = {}
+device_alt_chartdata_map_http = {}
+device_alt_chartdata_map_lock = threading.Lock()  # 设备高度图表数据更新锁
+
+# mqtt 消息格式
+# {
+#     "timestamp": "07:45:29",
+#     "device_id": "gnss001",
+#     "coordinates": {
+#         "lon": 118.07828833333333,
+#         "lat": 24.494528333333335,
+#         "alt": 48.1
+#     }
+# }
+
+
+# device_alt_chartdata_map_all = {
+#     # x轴时间 y轴高度
+#     "gnss001": {
+#         "xData": [1756278925148, 1756278926148, 1756278927148, 1756278925148],
+#         "yData": [100, 102, 103, 104]
+#     },
+
+# device_alt_chartdata_map_mqtt = {
+#     "gnss001": {
+#         "xData": [1756278935148, 1756278936148, 1756278427148, 1756275925148],
+#         "yData": [100, 102, 103, 104]
+#     },
+# }
+# device_alt_chartdata_map_http = {
+#     "gnss001": {
+#         "xData": [1756278935148, 1756278936148, 1756278427148, 1756275925148],
+#         "yData": [100, 102, 103, 104]
+#     }
+# }
+
+def handleDeviceMsgMqtt(deviceMsgStr):
+    # 处理设备上报信息逻辑
+    try:
+        if not deviceMsgStr:
+            raise Exception("消息为空")
+        if deviceMsgStr.isdecimal():
+            raise Exception("消息内容为纯数字")
+        deviceMsg = json.loads(deviceMsgStr)
+        device_id = deviceMsg.get("device_id")
+        if device_id is None:
+            raise Exception("设备ID为空")
+    except Exception as e:
+        logger.error("mqtt消息解析失败 %s", e)
+        return
+
+    # 新增或更新设备信息
+
+    global device_list
+    with device_list_lock:
+        matched_device = next((device for device in device_list if device['device_id'] == device_id), None)
+        if matched_device:
+            matched_device.update(deviceMsg)
+            matched_device["server_time"] = datetime.now().strftime("%Y/%m/%d %H:%M:%S")  # 服务器时间
+            matched_device["mqtt_timestamp"] = datetime.now().timestamp() * 1000  # 转换为毫秒时间戳
+        else:
+            deviceMsg["server_time"] = datetime.now().strftime("%Y/%m/%d %H:%M:%S")  # 服务器时间
+            deviceMsg["mqtt_timestamp"] = datetime.now().timestamp() * 1000  # 转换为毫秒时间戳
+            device_list.append(deviceMsg)
+        logger.info("device_list update: %s", device_list)
+
+    # 新增或更新设备高度图表数据
+    global device_alt_chartdata_map_all, device_alt_chartdata_map_mqtt, device_alt_chartdata_map_lock
+    with device_alt_chartdata_map_lock:
+        matched_device = device_alt_chartdata_map_all.get(device_id)
+        if matched_device:
+            matched_device["xData"].append(datetime.now().timestamp() * 1000)
+            matched_device["yData"].append(deviceMsg.get("coordinates").get("alt"))
+            logger.info("device_alt_chartdata_map_all update via mqtt: %s", device_alt_chartdata_map_all)
+        else:
+            device_alt_chartdata_map_all[device_id] = {
+                "xData": [datetime.now().timestamp() * 1000],
+                "yData": [deviceMsg.get("coordinates").get("alt")]
+            }
+            logger.info("device_alt_chartdata_map_all add a new device via mqtt: %s", device_alt_chartdata_map_all)
+
+        matched_device = device_alt_chartdata_map_mqtt.get(device_id)
+        if matched_device:
+            matched_device["xData"].append(datetime.now().timestamp() * 1000)
+            matched_device["yData"].append(deviceMsg.get("coordinates").get("alt"))
+            logger.info("device_alt_chartdata_map_mqtt update via mqtt: %s", device_alt_chartdata_map_mqtt)
+        else:
+            device_alt_chartdata_map_mqtt[device_id] = {
+                "xData": [datetime.now().timestamp() * 1000],
+                "yData": [deviceMsg.get("coordinates").get("alt")]
+            }
+            logger.info("device_alt_chartdata_map_mqtt add a new device via mqtt: %s", device_alt_chartdata_map_mqtt)
+
+    # 通知前端设备信息更新及更新的设备ID
+    socketio.emit("device_list", device_list)
+    socketio.emit("updated_device_id", device_id)
+
+
+def onMessageCallback(client, userdata, message):
+    # 解码mqtt消息及调用消息处理
+    try:
+        message_decoded = message.payload.decode("utf-8")
+    except UnicodeDecodeError:
+        message_decoded = message.payload.decode("gb18030")
+    except Exception as e:
+        logger.error("MQTT消息解析失败")
+        logger.error(e)
+        return
+    message_topic = message.topic
+    # logger.info("收到MQTT消息 话题：%s 消息：%s" % (message.topic, message_decoded))
+    if message_decoded in heart_beat_messages:
+        # 舍弃心跳包
+        logger.info("收到MQTT心跳包 话题：%s 消息：%s" % (message.topic, message_decoded))
+        return
+    handleDeviceMsgMqtt(message_decoded)
+    # socketio.emit("device-mqtt-message", message.payload.decode("gb18030"))
+
+
+mqtt_client = MQTTClient(
+    broker=MQTT_BROKER,
+    port=MQTT_PORT,
+    username=MQTT_USER,
+    password=MQTT_PASSWORD,
+    client_id=MQTT_CLIENT_ID,
+    onMessageCallback=onMessageCallback,
+)
 
 
 @app.errorhandler(404)
@@ -22,70 +175,157 @@ def index():
     return send_from_directory(app.static_folder, 'index.html')
 
 
-@app.route('/drone_download')
-def drone_download():
-    print("发送下载指令")
-    droneConnector.drone_conn.sendall(
-        droneConnector.pack_data({"cmd": "download", "device_id": 1})
-    )
-    return "OK"
+@app.route('/update_device_info', methods=['POST'])
+def update_device_info():
+    # 接收到设备上报信息
+    global device_list
+    # 检查请求是否为 JSON 格式
+    if not request.is_json:
+        return jsonify({"error": "Request must be JSON"}), 400
+    device_msg = request.json
+    device_id = device_msg.get("device_id")
+    # 新增或更新设备信息
+    global device_list
+    with device_list_lock:
+        matched_device = next((device for device in device_list if device['device_id'] == device_id), None)
+        if matched_device:
+            matched_device.update(device_msg)
+            matched_device["server_time"] = datetime.now().strftime("%Y/%m/%d %H:%M:%S")  # 服务器时间
+            matched_device["http_timestamp"] = datetime.now().timestamp() * 1000  # 转换为毫秒时间戳
+        else:
+            device_msg["server_time"] = datetime.now().strftime("%Y/%m/%d %H:%M:%S")  # 服务器时间
+            device_msg["http_timestamp"] = datetime.now().timestamp() * 1000  # 转换为毫秒时间戳
+            device_list.append(device_msg)
+        logger.info("device_list update via http: %s", device_list)
+
+    # 新增或更新设备高度图表数据
+    global device_alt_chartdata_map_all, device_alt_chartdata_map_http, device_alt_chartdata_map_lock
+    with device_alt_chartdata_map_lock:
+        matched_device = device_alt_chartdata_map_all.get(device_id)
+        if matched_device:
+            matched_device["xData"].append(datetime.now().timestamp() * 1000)
+            matched_device["yData"].append(device_msg.get("coordinates").get("alt"))
+            logger.info("device_alt_chartdata_map_all update via http: %s", device_alt_chartdata_map_all)
+        else:
+            device_alt_chartdata_map_all[device_id] = {
+                "xData": [datetime.now().timestamp() * 1000],
+                "yData": [device_msg.get("coordinates").get("alt")]
+            }
+            logger.info("device_alt_chartdata_map_all add a new device via http: %s", device_alt_chartdata_map_all)
+
+        matched_device = device_alt_chartdata_map_http.get(device_id)
+        if matched_device:
+            matched_device["xData"].append(datetime.now().timestamp() * 1000)
+            matched_device["yData"].append(device_msg.get("coordinates").get("alt"))
+            logger.info("device_alt_chartdata_map_http update via http: %s", device_alt_chartdata_map_http)
+        else:
+            device_alt_chartdata_map_http[device_id] = {
+                "xData": [datetime.now().timestamp() * 1000],
+                "yData": [device_msg.get("coordinates").get("alt")]
+            }
+            logger.info("device_alt_chartdata_map_http add a new device via http: %s", device_alt_chartdata_map_http)
+
+    # 通知前端设备信息更新及更新的设备ID
+    socketio.emit("device_list", device_list)
+    socketio.emit("updated_device_id", device_id)
+
+    response = {
+        "status": 200,
+        "message": "OK"
+    }
+    return jsonify(response)
 
 
-@app.route('/cloudserver_download')
-def cloudserver_download():
-    print("发送云端下载指令")
-    cloudServerConnector.cloud_conn.sendall(
-        cloudServerConnector.pack_data({"cmd": "download", "device_id": 1})
-    )
-    return "OK"
-    # try:
-    #     # 建立专用下载连接
-    #     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as dl_sock:
-    #         dl_sock.connect((droneConnector.host, 5001))  # 无人机下载专用端口
-    #         dl_sock.sendall(f"DOWNLOAD:{filename}".encode())
+# @app.route('/update_device_list', methods=['POST'])
+# def update_device_list():
+#     # 接收到设备列表
+#     global device_list
+#     # 检查请求是否为 JSON 格式
+#     if not request.is_json:
+#         return jsonify({"error": "Request must be JSON"}), 400
+#     device_list = request.json
+#     device_list = device_list
 
-    #         # 接收文件数据
-    #         filepath = f"{app.config['DOWNLOAD_FOLDER']}/{filename}"
-    #         with open(filepath, 'wb') as f:
-    #             while True:
-    #                 data = dl_sock.recv(4096)
-    #                 if not data:
-    #                     break
-    #                 f.write(data)
+#     logger.info("更新设备列表接口调用 全量更新设备列表")
 
-    #     return send_file(filepath, as_attachment=True)
-    # except Exception as e:
-    #     return f"Download failed: {e}", 500
+#     socketio.emit("device_list", device_list)
+#     response = {
+#         "status": 200,
+#         "message": "OK"
+#     }
+#     return jsonify(response)
+@app.route('/get_device_chartdata')
+def get_device_chartdata():
+    # 获取设备图表数据
+    device_id = request.args.get('device_id')
+    if not device_id:
+        return jsonify({"error": "device_id is required"}), 400
+    response = {}
+    global device_alt_chartdata_map_all, device_alt_chartdata_map_mqtt, device_alt_chartdata_map_http, device_alt_chartdata_map_lock
+    with device_alt_chartdata_map_lock:
+        chartdata_all = device_alt_chartdata_map_all.get(device_id)
+        chartdata_mqtt = device_alt_chartdata_map_mqtt.get(device_id)
+        chartdata_http = device_alt_chartdata_map_http.get(device_id)
+        if not chartdata_all:
+            response = {
+                "success": False,
+                "message": "设备不存在"
+            }
+            return jsonify(response)
+        if not chartdata_mqtt:
+            chartdata_mqtt = []
+        if not chartdata_http:
+            chartdata_http = []
+
+        response = {
+            "success": True,
+            "chartdata": {
+                "all": chartdata_all,
+                "mqtt": chartdata_mqtt,
+                "http": chartdata_http
+            }
+        }
+    return jsonify(response)
 
 
 @app.route('/test')
 def test():
-    return jsonify({
-        "drone_connecting": droneConnector.drone_connecting,
-        "cloud_connecting": cloudServerConnector.cloud_connecting,
-    })
+    logger.info("测试接口")
+    return "OK"
+
+
+@app.route('/drone_download')
+def drone_download():
+    logger.info("发送下载指令")
+    return "OK"
 
 
 @socketio.on('message')
 def handleMessage(msg):
-    print('Message: ' + msg)
+    logger.info('Message: ' + msg)
     send(msg)
+
+
+@socketio.on('device_list')
+def handleDeviceList(msg):
+    global device_list
+    if msg == "refresh":
+        emit("device_list", device_list)
+        logger.info('Device list from http emitted')
 
 
 @socketio.on('connect')
 def handleConnect():
-    print('Connected')
+    global device_list
+    logger.info('Connected')
+    emit("device_list", device_list)
 
 
 @socketio.on('disconnect')
 def handleDisconnect():
-    print('Disconnected')
+    logger.info('Disconnected')
 
 
 if __name__ == '__main__':
-    # 子线程启动TCP服务器
-    droneConnector.start()
-    cloudServerConnector.start()
-
     # 主线程启动Flask
-    socketio.run(app, host='0.0.0.0', port=8000)
+    socketio.run(app, host='0.0.0.0', port=8000, debug=False)  # debug务必为False 防止代码执行两次 导致mqtt连接失败

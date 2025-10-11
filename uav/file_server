@@ -1,0 +1,56 @@
+from flask import Flask, request, Response, send_file
+import os
+
+app = Flask(__name__)
+
+@app.route('/download/<path:filename>')
+def download_file(filename):
+    filepath = os.path.join("files", filename)  # 假设文件都在 ./files 下
+    file_size = os.path.getsize(filepath)
+
+    range_header = request.headers.get('Range', None)
+    if not range_header:
+        # 普通下载（无 Range）
+        return send_file(filepath, as_attachment=True)
+
+    # 解析 Range 请求头，例如 "bytes=1000-"
+    byte1, byte2 = 0, None
+    m = range_header.strip().split('=')[-1]
+    if '-' in m:
+        parts = m.split('-')
+        if parts[0]:
+            byte1 = int(parts[0])
+        if len(parts) > 1 and parts[1]:
+            byte2 = int(parts[1])
+
+    length = file_size - byte1
+    if byte2 is not None:
+        length = byte2 - byte1 + 1
+
+    def generate():
+        with open(filepath, 'rb') as f:
+            f.seek(byte1)
+            remaining = length
+            chunk_size = 8192
+            while remaining > 0:
+                read_length = min(chunk_size, remaining)
+                data = f.read(read_length)
+                if not data:
+                    break
+                yield data
+                remaining -= len(data)
+
+    # 返回部分内容
+    rv = Response(generate(), 
+                  status=206, 
+                  mimetype='application/octet-stream',
+                  direct_passthrough=True)
+
+    rv.headers.add('Content-Range', f'bytes {byte1}-{byte1 + length - 1}/{file_size}')
+    rv.headers.add('Accept-Ranges', 'bytes')
+    rv.headers.add('Content-Length', str(length))
+    rv.headers.add('Content-Disposition', f'attachment; filename="{os.path.basename(filepath)}"')
+    return rv
+
+if __name__ == "__main__":
+    app.run(host="0.0.0.0", port=5000, debug=True)
