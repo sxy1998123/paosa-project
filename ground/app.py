@@ -5,6 +5,7 @@ import logging
 from datetime import datetime
 import json
 import threading
+import os
 logging.basicConfig(
     level=logging.INFO,  # 修改日志级别输出所有日志
     format='%(asctime)s %(name)s [%(pathname)s:%(lineno)d] %(levelname)s %(message)s',
@@ -14,7 +15,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # flask
-app = Flask(__name__, static_folder="frontend")
+app = Flask(__name__, static_folder="frontend_dist")
 app.config['DOWNLOAD_FOLDER'] = 'download_cache'  # 文件下载路径
 
 # socketio
@@ -164,6 +165,15 @@ mqtt_client = MQTTClient(
 )
 
 
+@app.route('/<path:filename>')
+def static_files(filename):
+    file_path = os.path.join(app.static_folder, filename)
+    if os.path.exists(file_path):
+        return send_from_directory(app.static_folder, filename)
+    else:
+        # 文件不存在，交给前端路由处理
+        return send_from_directory(app.static_folder, 'index.html')
+
 @app.errorhandler(404)
 def page_not_found(error):
     # 返回index.html页面
@@ -175,7 +185,7 @@ def index():
     return send_from_directory(app.static_folder, 'index.html')
 
 
-@app.route('/update_device_info', methods=['POST'])
+@app.route('/api/update_device_info', methods=['POST'])
 def update_device_info():
     # 接收到设备上报信息
     global device_list
@@ -254,7 +264,7 @@ def update_device_info():
 #         "message": "OK"
 #     }
 #     return jsonify(response)
-@app.route('/get_device_chartdata')
+@app.route('/api/get_device_chartdata')
 def get_device_chartdata():
     # 获取设备图表数据
     device_id = request.args.get('device_id')
@@ -288,13 +298,13 @@ def get_device_chartdata():
     return jsonify(response)
 
 
-@app.route('/test')
+@app.route('/api/test')
 def test():
     logger.info("测试接口")
     return "OK"
 
 
-@app.route('/drone_download')
+@app.route('/api/drone_download')
 def drone_download():
     logger.info("发送下载指令")
     return "OK"
