@@ -17,7 +17,7 @@ logger = logging.getLogger(__name__)
 # flask
 app = Flask(__name__, static_folder="frontend_dist")
 app.config['DOWNLOAD_FOLDER'] = 'download_cache'  # 文件下载路径
-
+app.config['HISTORY_DATA_FOLDER'] = './HistoryData'  # 上传文件大小限制
 # socketio
 socketio = SocketIO(app, cors_allowed_origins="*")
 
@@ -52,7 +52,7 @@ device_alt_chartdata_map_lock = threading.Lock()  # 设备高度图表数据更�
 #     }
 # }
 
-
+# 设备高度图表数据格式
 # device_alt_chartdata_map_all = {
 #     # x轴时间 y轴高度
 #     "gnss001": {
@@ -72,6 +72,51 @@ device_alt_chartdata_map_lock = threading.Lock()  # 设备高度图表数据更�
 #         "yData": [100, 102, 103, 104]
 #     }
 # }
+
+# 保存GNSS数据到文件
+# 示例数据
+# {
+#     "timestamp": "07:45:29",
+#     "device_id": "gnss001",
+#     "coordinates": {
+#         "lon": 118.07828833333333,
+#         "lat": 24.494528333333335,
+#         "alt": 48.1
+#     }
+# }
+
+
+def saveGNSS(gnss_data):
+    try:
+        if not gnss_data:
+            return
+        time = datetime.now().strftime("%Y-%m-%d")
+        filename = "GNSS_" + time + ".txt"
+        filepath = os.path.join(app.config['HISTORY_DATA_FOLDER'], filename)
+        logger.info("gnss_data: %s", gnss_data)
+        if not os.path.exists(app.config['HISTORY_DATA_FOLDER']):
+            os.makedirs(app.config['HISTORY_DATA_FOLDER'])
+
+        # 构造数据文本
+        timestamp = gnss_data.get("timestamp")
+        device_id = gnss_data.get("device_id")
+        coordinates = gnss_data.get("coordinates")
+        lon = coordinates.get("lon")
+        lat = coordinates.get("lat")
+        alt = coordinates.get("alt")
+        gnss_data_text = f"设备ID：{device_id} 装置消息发送时间：{timestamp} 经度：{lon} 纬度：{lat} 高度：{alt} \n"
+        logger.info("GNSS数据：%s", gnss_data_text)
+        with open(filepath, 'a', encoding='utf-8') as f:
+            f.write(gnss_data_text)
+        return True
+    except Exception as e:
+        logger.error("GNSS数据保存失败 %s", e)
+        return False
+
+
+# uavip
+uavip = ""
+
 
 def handleDeviceMsgMqtt(deviceMsgStr):
     # 处理设备上报信息逻辑
@@ -133,6 +178,8 @@ def handleDeviceMsgMqtt(deviceMsgStr):
     # 通知前端设备信息更新及更新的设备ID
     socketio.emit("device_list", device_list)
     socketio.emit("updated_device_id", device_id)
+    # 保存到文件
+    saveGNSS(deviceMsg)
 
 
 def onMessageCallback(client, userdata, message):
@@ -174,6 +221,7 @@ def static_files(filename):
         # 文件不存在，交给前端路由处理
         return send_from_directory(app.static_folder, 'index.html')
 
+
 @app.errorhandler(404)
 def page_not_found(error):
     # 返回index.html页面
@@ -182,7 +230,47 @@ def page_not_found(error):
 
 @app.route('/')
 def index():
+    global uavIp
+    arg_uavIp = request.args.get('uavIp')
+    logger.info(f"接收到的uavIp:{arg_uavIp}")
+    if arg_uavIp:
+        uavIp = arg_uavIp
+        logger.info(f"设置uavIp:{uavIp}")
     return send_from_directory(app.static_folder, 'index.html')
+
+
+# 无人机相关接口
+@app.route('/api/set_uavip', methods=['POST'])
+def set_uavip():
+    # 设置无人机IP
+    global uavip
+    # 检查请求是否为 JSON 格式
+    if not request.is_json:
+        return jsonify({"error": "Request must be JSON"}), 400
+    uavip = request.json.get("uavip")
+    logger.info("设置无人机IP %s", uavip)
+    response = {
+        "status": 200,
+        "message": "OK"
+    }
+    return jsonify(response)
+
+
+@app.route('/api/uav_command', methods=['POST'])
+def uav_command():
+    # 无人机控制命令
+    # 检查请求是否为 JSON 格式
+    if not request.is_json:
+        return jsonify({"error": "Request must be JSON"}), 400
+    command = request.json.get("command")
+    logger.info("无人机控制命令 %s", command)
+    response = {
+        "status": 200,
+        "message": "OK"
+    }
+    return jsonify(response)
+
+# 设备信息接口
 
 
 @app.route('/api/update_device_info', methods=['POST'])
@@ -238,7 +326,8 @@ def update_device_info():
     # 通知前端设备信息更新及更新的设备ID
     socketio.emit("device_list", device_list)
     socketio.emit("updated_device_id", device_id)
-
+    # 保存到文件
+    saveGNSS(deviceMsg)
     response = {
         "status": 200,
         "message": "OK"
@@ -308,6 +397,8 @@ def test():
 def drone_download():
     logger.info("发送下载指令")
     return "OK"
+
+# socket相关
 
 
 @socketio.on('message')
