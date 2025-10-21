@@ -40,12 +40,15 @@ class MQTTClient:
         self.username = username
         self.password = password
         self.client_id = client_id
+        
+
         self.onConnectCallback = onConnectCallback or self._on_connect
         self.onDisconnectCallback = onDisconnectCallback or self._on_disconnect
         self.onPublishCallback = onPublishCallback or self._on_publish
         self.onMessageCallback = onMessageCallback or self._on_message
 
         self.client = mqtt.Client(self.client_id)
+        
         self._setup_callbacks()
         if tls and ca_certs in [None, ""]:
             logger.info("MQTTClient initialized with TLS but no ca_certs provided.skipping ca_certs")
