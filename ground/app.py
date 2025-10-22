@@ -1,7 +1,7 @@
 from flask import Flask, send_from_directory, send_file, jsonify, request
 from flask_socketio import SocketIO, send, emit
 from mqtt.mqtt import MQTTClient
-from socket_client.client import WifiSocketClient
+# from socket_client.client import WifiSocketClient
 import logging
 from datetime import datetime
 import json
@@ -262,8 +262,8 @@ mqtt_client = MQTTClient(
 )
 
 # socketio client
-wifi_socket_client = WifiSocketClient(server_ip=uavip, on_device_message=onWebsocketMessageCallback)
-wifi_socket_client.connect()
+# wifi_socket_client = WifiSocketClient(server_ip=uavip, on_device_message=onWebsocketMessageCallback)
+# wifi_socket_client.connect()
 
 
 @app.route('/<path:filename>')
