@@ -152,7 +152,7 @@ if __name__ == "__main__":
     MQTT_PORT = 1883
     MQTT_USER = 'test'
     MQTT_PASSWORD = '123'
-    MQTT_CLIENT_ID = 'paosa-python-client'
+    MQTT_CLIENT_ID = 'paosa-python-client-develop'
 
     def on_message_callback(client, userdata, message):
         """消息接收成功回调"""
