@@ -36,6 +36,7 @@ device_list = []
 device_list_lock = threading.Lock()  # 设备列表更新锁
 
 # 设备高度图表数据
+chart_maxlength = 1000
 device_alt_chartdata_map_all = {}
 device_alt_chartdata_map_mqtt = {}
 device_alt_chartdata_map_http = {}
@@ -78,8 +79,8 @@ def saveGNSS(gnss_data):
     try:
         if not gnss_data:
             return
-        time = datetime.now().strftime("%Y-%m-%d")
-        filename = "GNSS_" + time + ".txt"
+        time_ymd = datetime.now().strftime("%Y-%m-%d")
+        filename = "GNSS_" + time_ymd + ".txt"
         filepath = os.path.join(app.config['HISTORY_DATA_FOLDER'], filename)
         # logger.info("gnss_data: %s", gnss_data)
         if not os.path.exists(app.config['HISTORY_DATA_FOLDER']):
@@ -92,8 +93,10 @@ def saveGNSS(gnss_data):
         lon = coordinates.get("lon")
         lat = coordinates.get("lat")
         alt = coordinates.get("alt")
-        gnss_data_text = f"设备ID：{device_id} 装置消息发送时间：{timestamp} 经度：{lon} 纬度：{lat} 高度：{alt} \n"
-        logger.info("GNSS数据：%s", gnss_data_text)
+        # 系统时间 
+        time_now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        gnss_data_text = f"系统时间：{time_now} 设备ID：{device_id} 装置消息发送时间：{timestamp} 经度：{lon} 纬度：{lat} 高度：{alt} \n"
+        # logger.info("GNSS数据：%s", gnss_data_text)
         with open(filepath, 'a', encoding='utf-8') as f:
             f.write(gnss_data_text)
         return True
@@ -113,10 +116,14 @@ def handleDeviceMsgMqtt(deviceMsgStr):
         device_id = deviceMsg.get("device_id")
         if device_id is None:
             raise Exception("设备ID为空")
+        lon = deviceMsg.get("coordinates").get("lon")
+        lat = deviceMsg.get("coordinates").get("lat")
+        alt = deviceMsg.get("coordinates").get("alt")
+        if lon == 0 and lat == 0 and alt == 0:
+            raise Exception("经纬度信息均为0 判定为无效信息 忽略")
     except Exception as e:
         logger.error("mqtt消息解析失败 %s", e)
         return
-
     # 新增或更新设备信息
     global device_list
     with device_list_lock:
@@ -139,6 +146,9 @@ def handleDeviceMsgMqtt(deviceMsgStr):
             matched_device["xData"].append(datetime.now().timestamp() * 1000)
             matched_device["yData"].append(deviceMsg.get("coordinates").get("alt"))
             # logger.info("device_alt_chartdata_map_all update via mqtt: %s", device_alt_chartdata_map_all)
+            if len(matched_device["xData"]) > chart_maxlength:
+                matched_device["xData"][:] = matched_device["xData"][-chart_maxlength:]
+                matched_device["yData"][:] = matched_device["yData"][-chart_maxlength:]
         else:
             device_alt_chartdata_map_all[device_id] = {
                 "xData": [datetime.now().timestamp() * 1000],
@@ -151,6 +161,9 @@ def handleDeviceMsgMqtt(deviceMsgStr):
             matched_device["xData"].append(datetime.now().timestamp() * 1000)
             matched_device["yData"].append(deviceMsg.get("coordinates").get("alt"))
             # logger.info("device_alt_chartdata_map_mqtt update via mqtt: %s", device_alt_chartdata_map_mqtt)
+            if len(matched_device["xData"]) > chart_maxlength:
+                matched_device["xData"][:] = matched_device["xData"][-chart_maxlength:]
+                matched_device["yData"][:] = matched_device["yData"][-chart_maxlength:]
         else:
             device_alt_chartdata_map_mqtt[device_id] = {
                 "xData": [datetime.now().timestamp() * 1000],
@@ -168,6 +181,7 @@ def handleDeviceMsgMqtt(deviceMsgStr):
 def handleDeviceMsgWebsocket(deviceMsg):
     device_id = deviceMsg.get("device_id")
     device_msg = deviceMsg
+    
     # 新增或更新设备信息
     global device_list
     with device_list_lock:
@@ -189,25 +203,32 @@ def handleDeviceMsgWebsocket(deviceMsg):
         if matched_device:
             matched_device["xData"].append(datetime.now().timestamp() * 1000)
             matched_device["yData"].append(device_msg.get("coordinates").get("alt"))
-            logger.info("device_alt_chartdata_map_all update via websocket: %s", device_alt_chartdata_map_all)
+            # logger.info("device_alt_chartdata_map_all update via websocket: %s", device_alt_chartdata_map_all)
+            if len(matched_device["xData"]) > chart_maxlength:
+                matched_device["xData"][:] = matched_device["xData"][-chart_maxlength:]
+                matched_device["yData"][:] = matched_device["yData"][-chart_maxlength:]
+                logger.info("超长 截取")
         else:
             device_alt_chartdata_map_all[device_id] = {
                 "xData": [datetime.now().timestamp() * 1000],
                 "yData": [device_msg.get("coordinates").get("alt")]
             }
-            logger.info("device_alt_chartdata_map_all add a new device via websocket: %s", device_alt_chartdata_map_all)
+            # logger.info("device_alt_chartdata_map_all add a new device via websocket: %s", device_alt_chartdata_map_all)
 
         matched_device = device_alt_chartdata_map_http.get(device_id)
         if matched_device:
             matched_device["xData"].append(datetime.now().timestamp() * 1000)
             matched_device["yData"].append(device_msg.get("coordinates").get("alt"))
-            logger.info("device_alt_chartdata_map_http update via websocket: %s", device_alt_chartdata_map_http)
+            # logger.info("device_alt_chartdata_map_http update via websocket: %s", device_alt_chartdata_map_http)
+            if len(matched_device["xData"]) > chart_maxlength:
+                matched_device["xData"][:] = matched_device["xData"][-chart_maxlength:]
+                matched_device["yData"][:] = matched_device["yData"][-chart_maxlength:]
         else:
             device_alt_chartdata_map_http[device_id] = {
                 "xData": [datetime.now().timestamp() * 1000],
                 "yData": [device_msg.get("coordinates").get("alt")]
             }
-            logger.info("device_alt_chartdata_map_http add a new device via websocket: %s", device_alt_chartdata_map_http)
+            # logger.info("device_alt_chartdata_map_http add a new device via websocket: %s", device_alt_chartdata_map_http)
 
     # 通知前端设备信息更新及更新的设备ID
     socketio.emit("device_list", device_list)
@@ -329,40 +350,30 @@ def uav_command():
 # 设备信息接口
 
 
-# @app.route('/api/update_device_info', methods=['POST'])
-# def update_device_info():
-#     # 检查请求是否为 JSON 格式
-#     if not request.is_json:
-#         return jsonify({"error": "Request must be JSON"}), 400
-#     device_msg = request.json
+@app.route('/api/update_device_info', methods=['POST'])
+def update_device_info():
+    # 检查请求是否为 JSON 格式
+    if not request.is_json:
+        return jsonify({"error": "Request must be JSON"}), 400
 
-#     # 接收到设备上报信息
-#     handleDeviceMsgWebsocket(device_msg)
-#     response = {
-#         "status": 200,
-#         "message": "OK"
-#     }
-#     return jsonify(response)
+    device_msg = request.json
+    logger.info(device_msg)
+    device_id = device_msg.get("device_id")
+    coordinates = device_msg.get("coordinates")
+    device_ip = device_msg.get("device_ip")
+    if not (device_id and coordinates and device_ip):
+        return jsonify({"error": "Missing field device_id or coordinates or device_ip"}), 400
+    lon = coordinates.get("lon")
+    lat = coordinates.get("lat")
+    alt = coordinates.get("alt")
+    if not (lon and lat and alt):
+        return jsonify({"error": "Missing field lon or lat or alt in coordinates"}), 400
+    # 接收到设备上报信息
+    handleDeviceMsgWebsocket(device_msg)
+    response = {"status": 200, "message": "OK"}
+    return jsonify(response)
 
 
-# @app.route('/update_device_list', methods=['POST'])
-# def update_device_list():
-#     # 接收到设备列表
-#     global device_list
-#     # 检查请求是否为 JSON 格式
-#     if not request.is_json:
-#         return jsonify({"error": "Request must be JSON"}), 400
-#     device_list = request.json
-#     device_list = device_list
-
-#     logger.info("更新设备列表接口调用 全量更新设备列表")
-
-#     socketio.emit("device_list", device_list)
-#     response = {
-#         "status": 200,
-#         "message": "OK"
-#     }
-#     return jsonify(response)
 @app.route('/api/get_device_chartdata')
 def get_device_chartdata():
     # 获取设备图表数据
