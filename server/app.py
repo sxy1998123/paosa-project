@@ -132,5 +132,5 @@ if __name__ == '__main__':
         onMessageCallback=onMqttMessageCallback,
     )
     while True:
-        mqtt_client.client.publish(topic='gnss', payload=b'\xf8\xfd\xfe\xffhello')
+        # mqtt_client.client.publish(topic='gnss', payload=b'\xf8\xfd\xfe\xffhello')
         time.sleep(5)
