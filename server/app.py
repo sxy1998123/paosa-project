@@ -47,6 +47,23 @@ def saveGNSS(gnss_data):
         return False
 
 
+def saveUnknownMsg(unknown_msg):
+    try:
+        if not unknown_msg:
+            return
+        time = datetime.now().strftime("%Y-%m-%d")
+        filename = "UnknownMsg_" + time + ".txt"
+        filepath = os.path.join(config['HISTORY_DATA_FOLDER'], filename)
+        if not os.path.exists(config['HISTORY_DATA_FOLDER']):
+            os.makedirs(config['HISTORY_DATA_FOLDER'])
+        with open(filepath, "ab") as f:
+            f.write(unknown_msg + b"\n") if isinstance(unknown_msg, bytes) else f.write(unknown_msg.encode('latin1') + b"\n")
+        return True
+    except Exception as e:
+        logger.error("未知消息保存失败 %s", e)
+        return False
+
+
 def handleDeviceMsgMqtt(deviceMsgStr):
     # 处理设备上报信息逻辑
     try:
@@ -66,20 +83,35 @@ def handleDeviceMsgMqtt(deviceMsgStr):
 
 
 def onMqttMessageCallback(client, userdata, message):
-    # 解码mqtt消息及调用消息处理
     try:
+        # 尝试UTF-8解码
         message_decoded = message.payload.decode("utf-8")
     except UnicodeDecodeError:
-        message_decoded = message.payload.decode("gb18030")
+        try:
+            # 尝试GB18030解码
+            message_decoded = message.payload.decode("gb18030")
+        except UnicodeDecodeError:
+            saveUnknownMsg(message.payload)
+            logger.error("⚠️ 非UTF-8或GB18030编码的MQTT消息，已保存到未知消息文件")
+            return
     except Exception as e:
-        logger.error("MQTT消息解析失败")
-        logger.error(e)
+        logger.error("MQTT消息解析异常: %s", e)
         return
-    # logger.info("收到MQTT消息 话题：%s 消息：%s" % (message.topic, message_decoded))
+
+    # 打印前可检查是否可能是JSON文本
+    if not message_decoded.strip():
+        logger.warning("⚠️ MQTT消息为空")
+        return
+
     if message_decoded in heart_beat_messages:
-        # 舍弃心跳包
-        logger.info("收到MQTT心跳包 话题：%s 消息：%s" % (message.topic, message_decoded))
+        logger.info("收到MQTT心跳包 话题：%s 消息：%s", message.topic, message_decoded)
         return
+
+    # 若不是纯文本或JSON，可加检查
+    if not message_decoded.strip().startswith("{"):
+        logger.warning("⚠️ 非JSON格式MQTT消息: %s", message_decoded)
+        return
+
     handleDeviceMsgMqtt(message_decoded)
 
 
@@ -100,4 +132,5 @@ if __name__ == '__main__':
         onMessageCallback=onMqttMessageCallback,
     )
     while True:
+        mqtt_client.client.publish(topic='gnss', payload=b'\xf8\xfd\xfe\xffhello')
         time.sleep(5)

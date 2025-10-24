@@ -93,7 +93,7 @@ def saveGNSS(gnss_data):
         lon = coordinates.get("lon")
         lat = coordinates.get("lat")
         alt = coordinates.get("alt")
-        # 系统时间 
+        # 系统时间
         time_now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         gnss_data_text = f"系统时间：{time_now} 设备ID：{device_id} 装置消息发送时间：{timestamp} 经度：{lon} 纬度：{lat} 高度：{alt} \n"
         # logger.info("GNSS数据：%s", gnss_data_text)
@@ -181,7 +181,7 @@ def handleDeviceMsgMqtt(deviceMsgStr):
 def handleDeviceMsgWebsocket(deviceMsg):
     device_id = deviceMsg.get("device_id")
     device_msg = deviceMsg
-    
+
     # 新增或更新设备信息
     global device_list
     with device_list_lock:
@@ -242,9 +242,14 @@ def onMqttMessageCallback(client, userdata, message):
     try:
         message_decoded = message.payload.decode("utf-8")
     except UnicodeDecodeError:
-        message_decoded = message.payload.decode("gb18030")
+        try:
+            message_decoded = message.payload.decode("gb18030")
+        except Exception as e:
+            logger.error("MQTT消息GB18030解析失败")
+            logger.error(e)
+            return
     except Exception as e:
-        logger.error("MQTT消息解析失败")
+        logger.error("MQTT消息unicode解析失败")
         logger.error(e)
         return
     # logger.info("收到MQTT消息 话题：%s 消息：%s" % (message.topic, message_decoded))
