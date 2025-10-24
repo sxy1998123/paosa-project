@@ -245,11 +245,11 @@ def onMqttMessageCallback(client, userdata, message):
         try:
             message_decoded = message.payload.decode("gb18030")
         except Exception as e:
-            logger.error("MQTT消息GB18030解析失败")
+            logger.error("MQTT消息Unicode、GB18030解析失败")
             logger.error(e)
             return
     except Exception as e:
-        logger.error("MQTT消息unicode解析失败")
+        logger.error("MQTT消息Unicode解析失败")
         logger.error(e)
         return
     # logger.info("收到MQTT消息 话题：%s 消息：%s" % (message.topic, message_decoded))
