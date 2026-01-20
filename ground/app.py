@@ -7,6 +7,8 @@ from datetime import datetime
 import json
 import threading
 import os
+import random
+import string
 # logger
 logging.basicConfig(
     level=logging.INFO,  # 修改日志级别输出所有日志
@@ -270,14 +272,17 @@ def onWebsocketMessageCallback(device_msg):
         return
     handleDeviceMsgWebsocket(device_msg)
 
+def generate_client_id():
+    return ''.join(random.choices(string.ascii_letters + string.digits,k=6))
 
 # mqtt
 MQTT_BROKER = '8.140.205.252'
 MQTT_PORT = 1883
 MQTT_USER = 'test'
 MQTT_PASSWORD = '123'
-MQTT_CLIENT_ID = 'paosa-python-client'
+MQTT_CLIENT_ID = generate_client_id()
 
+logger.info("MQTT_CLIENT_ID:%s",MQTT_CLIENT_ID)
 mqtt_client = MQTTClient(
     broker=MQTT_BROKER,
     port=MQTT_PORT,
@@ -336,21 +341,21 @@ def set_uavip():
     return jsonify(response)
 
 
-@app.route('/api/uav_command', methods=['POST'])
-def uav_command():
-    # 无人机控制命令
-    # 检查请求是否为 JSON 格式
-    if not request.is_json:
-        return jsonify({"error": "Request must be JSON"}), 400
-    command = request.json.get("command")
-    logger.info("收到无人机控制命令 %s", command)
-    wifi_socket_client.send_command(command)
-    logger.info("发送控制命令到无人机 %s", command)
-    response = {
-        "status": 200,
-        "message": "OK"
-    }
-    return jsonify(response)
+# @app.route('/api/uav_command', methods=['POST'])
+# def uav_command():
+#     # 无人机控制命令
+#     # 检查请求是否为 JSON 格式
+#     if not request.is_json:
+#         return jsonify({"error": "Request must be JSON"}), 400
+#     command = request.json.get("command")
+#     logger.info("收到无人机控制命令 %s", command)
+#     wifi_socket_client.send_command(command)
+#     logger.info("发送控制命令到无人机 %s", command)
+#     response = {
+#         "status": 200,
+#         "message": "OK"
+#     }
+#     return jsonify(response)
 
 # 设备信息接口
 
